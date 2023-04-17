@@ -1,13 +1,14 @@
 import json
 import mysql.connector
 import matplotlib.pyplot as plt
-import numpy as np
 import urllib.request
-import matplotlib.image as mpimg
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-from PIL import Image
+from PIL import Image, ImageDraw, ImageOps
+import os
+import cv2
+import numpy as np
 
-def getImage(path, zoom=0.05):
+def getImage(path, zoom=0.03):
     return OffsetImage(plt.imread(path), zoom=zoom)
 
 def saveImages(player_id_values):
@@ -26,49 +27,90 @@ def saveImages(player_id_values):
                 print(i)
                 url_response.close()
 
-data = json.load(open('db.json'))
+def crop_images():
+    # Set the directory where your PNG files are located
+    directory = './assets'
 
-mydb = mysql.connector.connect(
-    host="localhost",
-    user=data["user"],
-    password=data["password"],
-    port=data["port"],
-    database=data["database"],
-)
-current_year = "22/23"
-mycursor = mydb.cursor(dictionary=True)
-mycursor.execute(
-    f"SELECT PDEF FROM player WHERE SeasonYear = %s AND PDEF != 0",
-    (current_year,))
-pdef = mycursor.fetchall()
-pdef_values = [t['PDEF'] for t in pdef]
+    # Loop through the PNG files in the directory
+    for filename in os.listdir(directory):
+        if filename.endswith('.png'):
+            # Load the image using cv2
+            image = cv2.imread(os.path.join(directory, filename), cv2.IMREAD_UNCHANGED)
 
-mycursor.execute(
-    f"SELECT RDEF FROM player WHERE SeasonYear = %s AND RDEF != 0",
-    (current_year,))
-rdef = mycursor.fetchall()
-rdef_values = [t['RDEF'] for t in rdef]
+            # Get the image dimensions
+            height, width = image.shape[:2]
 
-mycursor.execute(
-    f"SELECT NbaPlayerId FROM player WHERE SeasonYear = %s AND RDEF != 0",
-    (current_year,))
-player_id = mycursor.fetchall()
-player_id_values = [t['NbaPlayerId'] for t in player_id]
+            # Define the center and radius of the circle
+            center = (int(width / 2), int(height / 2))
+            radius = min(center[0], center[1])
 
-url = "https://cdn.nba.com/headshots/nba/latest/1040x760/" + str(player_id_values[0]) + ".png?imwidth=1040&imheight=760"
+            # Create a mask with a white circle on a transparent background
+            mask = np.zeros((height, width, 4), dtype=np.uint8)
+            cv2.circle(mask, center, radius, (255, 255, 255, 255), -1)
 
-x = rdef_values
-y = pdef_values
+            # Apply the mask to the image to crop it to a circle
+            masked_image = cv2.bitwise_and(image, mask)
 
-paths = []
-for i in range(len(player_id_values)):
-    paths.append("assets/" + str(player_id_values[i]) + ".png")
+            # Save the cropped image as a new PNG file
+            cropped_filename = os.path.splitext(filename)[0] + '_cropped.png'
+            cv2.imwrite(os.path.join(directory, cropped_filename), masked_image)
 
-fig, ax = plt.subplots()
-ax.scatter(x, y)
+def rpdef_graph(current_year, position, filename):
+    data = json.load(open('db.json'))
 
-for x0, y0, path in zip(x, y, paths):
-    ab = AnnotationBbox(getImage(path), (x0, y0), frameon=False)
-    ax.add_artist(ab)
+    mydb = mysql.connector.connect(
+        host="localhost",
+        user=data["user"],
+        password=data["password"],
+        port=data["port"],
+        database=data["database"],
+    )
+    mycursor = mydb.cursor(dictionary=True)
+    mycursor.execute(
+        f"SELECT PDEF FROM player WHERE SeasonYear = %s AND PDEF != 0 AND Position LIKE %s",
+        (current_year, position,))
+    pdef = mycursor.fetchall()
+    pdef_values = [t['PDEF'] for t in pdef]
 
-plt.show()
+    mycursor.execute(
+        f"SELECT RDEF FROM player WHERE SeasonYear = %s AND RDEF != 0 AND Position LIKE %s",
+        (current_year, position,))
+    rdef = mycursor.fetchall()
+    rdef_values = [t['RDEF'] for t in rdef]
+
+    mycursor.execute(
+        f"SELECT NbaPlayerId FROM player WHERE SeasonYear = %s AND RDEF != 0 AND Position LIKE %s",
+        (current_year, position,))
+    player_id = mycursor.fetchall()
+    player_id_values = [t['NbaPlayerId'] for t in player_id]
+
+    x = rdef_values
+    y = pdef_values
+
+    paths = []
+    for i in range(len(player_id_values)):
+        paths.append("assets/" + str(player_id_values[i]) + "_cropped.png")
+
+    fig, ax = plt.subplots(dpi=300)
+    ax.scatter(x, y)
+
+    for x0, y0, path in zip(x, y, paths):
+        ab = AnnotationBbox(getImage(path), (x0, y0), frameon=False)
+        ax.add_artist(ab)
+
+    plt.title('RPDEF ~ Rim Perimeter Defensive Metric', pad=15, fontweight='bold')
+    plt.xlabel('RDEF score')
+    plt.ylabel('PDEF score')
+
+    plt.show()
+    fig.savefig(filename, dpi=300, bbox_inches='tight')
+
+rpdef_graph("22/23", "%", "22-23-all")
+
+
+
+
+
+
+
+
